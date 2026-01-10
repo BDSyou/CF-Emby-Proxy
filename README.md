@@ -44,7 +44,7 @@ wrangler login
 ### 第三步：克隆或下载本项目
 
 ```bash
-git clone https://github.com/your-username/CF-Emby-Proxy.git
+git clone https://github.com/cnm-microsoft/CF-Emby-Proxy.git
 cd CF-Emby-Proxy
 ```
 
