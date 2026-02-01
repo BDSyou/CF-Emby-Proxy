@@ -43,6 +43,9 @@ app.all('*', async (c) => {
   if (url.pathname === '/' || url.pathname === '/index.html') {
     return c.html(STATUS_PAGE_HTML)
   }
+  if (url.pathname === '/ping') {
+    return new Response('pong', { status: 200 })
+}
 
   // 强制使用 HTTPS 协议回源
   const targetUrl = new URL(url.pathname + url.search, CONFIG.UPSTREAM_URL)
@@ -231,7 +234,7 @@ const STATUS_PAGE_HTML = `
         </div>
 
         <div class="flex gap-4">
-            <a href="/emby/" class="flex-1 bg-indigo-600 text-white text-center py-3 rounded-xl font-bold shadow-md">访问EMBY服务</a>
+            <a href="https://emos.best" class="flex-1 bg-indigo-600 text-white text-center py-3 rounded-xl font-bold shadow-md">访问EMBY服务</a>
             <button onclick="location.reload()" class="flex-1 bg-white border border-gray-200 text-blue-600 py-3 rounded-xl font-bold">重新测试延迟</button>
         </div>
         
