@@ -4,7 +4,9 @@ const CONFIG = {
   UPSTREAM_URL: 'https://emos.best', 
   PROXY_ID: 'eO9M28W9Js',
   PROXY_NAME: 'you',
-  // 优化图片缓存正则，安卓端海报墙加载频繁，建议覆盖 /emby/Items/*/Images/*
+  // 路径前缀定义
+  BASE_PATH: '/emby',
+  // 扩展静态资源匹配，增加对包含 /emby 路径的处理
   STATIC_REGEX: /(\.(jpg|jpeg|png|gif|css|js|ico|svg|webp|woff|woff2)|(\/Images\/(Primary|Backdrop|Logo|Thumb|Banner|Art))|(\/emby\/Items\/.*\/Images\/))/i,
   VIDEO_REGEX: /(\/Videos\/|\/Items\/.*\/Download|\/Items\/.*\/Stream)/i,
   API_CACHE_REGEX: /(\/Items\/Resume|\/Users\/.*\/Items\/)/i,
@@ -29,24 +31,29 @@ async function fetchWithTimeout(url, options, timeout) {
 app.all('*', async (c) => {
   const req = c.req.raw
   const url = new URL(req.url)
-  const targetUrl = new URL(url.pathname + url.search, CONFIG.UPSTREAM_URL)
+  
+  // --- 路径补全逻辑 ---
+  // 如果请求路径不以 /emby 开头，且不是根路径，则自动加上 /emby 转发给源站
+  let path = url.pathname
+  if (!path.startsWith(CONFIG.BASE_PATH) && path !== '/') {
+    path = CONFIG.BASE_PATH + path
+  }
+  
+  const targetUrl = new URL(path + url.search, CONFIG.UPSTREAM_URL)
   
   const proxyHeaders = new Headers(req.headers)
-  
-  // --- 必填身份头部 ---
   proxyHeaders.set('Host', targetUrl.hostname)
   proxyHeaders.set('Referer', targetUrl.origin)
   proxyHeaders.set('Origin', targetUrl.origin)
   proxyHeaders.set('EMOS-PROXY-ID', CONFIG.PROXY_ID)
   proxyHeaders.set('EMOS-PROXY-NAME', CONFIG.PROXY_NAME)
 
-  // --- 安卓端必须传递 X-FORWARDED-FOR 否则可能被源站风控 ---
+  // 必须传递 X-FORWARDED-FOR 供源站校验
   const clientIp = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')
   if (clientIp) {
     proxyHeaders.set('X-Forwarded-For', clientIp)
   }
 
-  // 剔除杂项
   proxyHeaders.delete('cf-connecting-ip')
   proxyHeaders.delete('cf-ray')
   proxyHeaders.delete('cf-visitor')
@@ -57,9 +64,9 @@ app.all('*', async (c) => {
     proxyHeaders.delete('content-length')
   }
 
-  const isStatic = CONFIG.STATIC_REGEX.test(url.pathname)
-  const isVideo = CONFIG.VIDEO_REGEX.test(url.pathname)
-  const isApiCacheable = CONFIG.API_CACHE_REGEX.test(url.pathname)
+  const isStatic = CONFIG.STATIC_REGEX.test(path)
+  const isVideo = CONFIG.VIDEO_REGEX.test(path)
+  const isApiCacheable = CONFIG.API_CACHE_REGEX.test(path)
   const isWebSocket = req.headers.get('Upgrade') === 'websocket'
 
   const cfConfig = {
@@ -83,7 +90,6 @@ app.all('*', async (c) => {
 
   try {
     let response;
-    // 视频和 Socket 直连
     if (isVideo || isWebSocket || req.method === 'POST') {
       response = await fetch(targetUrl.toString(), fetchOptions)
     } else {
@@ -94,42 +100,35 @@ app.all('*', async (c) => {
       }
     }
 
-    // --- 响应处理 ---
-    // 直接继承所有头部，确保 Content-Type 和 Content-Range 完整透传给安卓
     const resHeaders = new Headers(response.headers)
-    
     resHeaders.delete('content-security-policy')
     resHeaders.delete('clear-site-data')
     resHeaders.set('access-control-allow-origin', '*')
 
-    // 针对安卓端视频流关闭保持连接，防止 Socket 占用导致播放卡死
     if (isVideo) {
-        resHeaders.set('Connection', 'close')
+      resHeaders.set('Connection', 'close')
     }
 
-    // 静态资源强行命中缓存
     if (isStatic && (response.status === 200 || response.status === 304)) {
-        resHeaders.set('Cache-Control', 'public, max-age=31536000, immutable')
-        resHeaders.delete('Pragma')
+      resHeaders.set('Cache-Control', 'public, max-age=31536000, immutable')
     }
 
-    // 核心处理：101, 206, 302 等状态码必须由 response.status 原样返回
     if (response.status === 101) {
       return new Response(null, { status: 101, webSocket: response.webSocket, headers: resHeaders })
     }
 
-    // 修正重定向
+    // 重定向修正：确保重定向后的 Location 不会丢失 /emby 前缀或产生双重前缀
     if ([301, 302, 303, 307, 308].includes(response.status)) {
-        const location = resHeaders.get('location')
-        if (location) {
-             const locUrl = new URL(location, targetUrl.href)
-             if (locUrl.hostname === targetUrl.hostname) {
-                 resHeaders.set('Location', locUrl.pathname + locUrl.search)
-             }
+      const location = resHeaders.get('location')
+      if (location) {
+        const locUrl = new URL(location, targetUrl.href)
+        if (locUrl.hostname === targetUrl.hostname) {
+          // 返回给客户端时，统一抹掉源站的 /emby 前缀，由 Worker 重新处理逻辑，或者保持相对路径
+          resHeaders.set('Location', locUrl.pathname + locUrl.search)
         }
+      }
     }
 
-    // 返回给客户端
     return new Response(response.body, {
       status: response.status,
       headers: resHeaders
