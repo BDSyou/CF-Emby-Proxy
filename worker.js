@@ -2,187 +2,145 @@ import { Hono } from 'hono'
 
 const CONFIG = {
   UPSTREAM_URL: 'https://emos.best',
-
-  PROXY_ID: 'eABCDEFGHs',
-  PROXY_NAME: '@emos',
+  PROXY_ID: 'eO9M28W9Js',
+  PROXY_NAME: '游',
 
   STATIC_REGEX: /(\.(jpg|jpeg|png|gif|css|js|ico|svg|webp|woff|woff2)$)|(\/emby\/Items\/.*\/Images\/)/i,
   VIDEO_REGEX: /(\/Videos\/|\/Items\/.*\/(Stream|Download))/i,
   API_CACHE_REGEX: /(\/Items\/Resume|\/Users\/.*\/Items\/)/i,
-
   API_TIMEOUT: 2000
 }
 
 const app = new Hono()
 
-async function fetchWithTimeout(url, options, timeout) {
+async function safeFetch(url, options, timeout) {
   const controller = new AbortController()
-  const id = setTimeout(() => controller.abort(), timeout)
+  const id = timeout
+    ? setTimeout(() => controller.abort(), timeout)
+    : null
+
   try {
-    return await fetch(url, { ...options, signal: controller.signal })
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    })
+  } catch (e) {
+    return null
   } finally {
-    clearTimeout(id)
+    if (id) clearTimeout(id)
   }
 }
 
 app.all('*', async (c) => {
-  const req = c.req.raw
-  const url = new URL(req.url)
+  try {
+    const req = c.req.raw
+    const url = new URL(req.url)
 
-  // 状态页
-  if (url.pathname === '/' || url.pathname === '/index.html') {
-    return c.html(STATUS_PAGE_HTML)
-  }
-  if (url.pathname === '/ping') {
-    return new Response('pong', { status: 200 })
-  }
-
-  /* ---------- /emby 直通（防 302 + 稳定 Cache Key） ---------- */
-  const targetPath = url.pathname.startsWith('/emby')
-    ? url.pathname
-    : '/emby' + url.pathname
-
-  const targetUrl = new URL(targetPath + url.search, CONFIG.UPSTREAM_URL)
-
-  const isStatic = CONFIG.STATIC_REGEX.test(targetPath)
-  const isVideo = CONFIG.VIDEO_REGEX.test(targetPath)
-  const isApiCacheable =
-    req.method === 'GET' && CONFIG.API_CACHE_REGEX.test(targetPath)
-  const isWebSocket = req.headers.get('upgrade') === 'websocket'
-
-  /* ---------- Hills 极限优化：Range 视频直接穿透 ---------- */
-  if (isVideo && req.headers.has('range')) {
-    return fetch(targetUrl, {
-      method: req.method,
-      headers: req.headers,
-      body: req.body
-    })
-  }
-
-  /* ---------- Header 构建（Yamb Cache 友好） ---------- */
-  const headers = new Headers()
-  const clientIp =
-    req.headers.get('cf-connecting-ip') ||
-    req.headers.get('x-forwarded-for')
-
-  headers.set('Host', targetUrl.hostname)
-  headers.set('Origin', targetUrl.origin)
-  headers.set('Referer', targetUrl.origin)
-
-  headers.set('EMOS-PROXY-ID', CONFIG.PROXY_ID)
-  headers.set('EMOS-PROXY-NAME', CONFIG.PROXY_NAME)
-  if (clientIp) headers.set('X-Forwarded-For', clientIp)
-
-  // ⚠️ Yamb：不透传 User-Agent（稳定 Cache Key）
-  const passHeaders = isVideo
-    ? ['range', 'accept']
-    : ['authorization', 'accept', 'accept-language']
-
-  for (const h of passHeaders) {
-    const v = req.headers.get(h)
-    if (v) headers.set(h, v)
-  }
-
-  /* ---------- Body ---------- */
-  let body = null
-  if (!['GET', 'HEAD'].includes(req.method)) {
-    body = await req.arrayBuffer()
-  }
-
-  /* ---------- Yamb API TTL 分层 ---------- */
-  const apiTtl =
-    /Resume/i.test(targetPath) ? 5 :
-    /Users\/.*\/Items/i.test(targetPath) ? 8 :
-    0
-
-  /* ---------- Cloudflare Cache 策略 ---------- */
-  const cf = {
-    cacheEverything: isStatic || isApiCacheable,
-    cacheTtl: isStatic ? 31536000 : 0,
-    cacheTtlByStatus: isApiCacheable && apiTtl
-      ? { '200-299': apiTtl }
-      : undefined,
-
-    polish: isStatic ? 'lossy' : 'off',
-    minify: isStatic ? { javascript: true, css: true, html: true } : undefined,
-
-    // 视频彻底不让 CF 插手
-    mirage: false,
-    apps: false,
-    scrapeShield: false
-  }
-
-  const fetchOptions = {
-    method: req.method,
-    headers,
-    body,
-    redirect: 'manual',
-    cf
-  }
-
-  let upstream
-  if (isVideo || isWebSocket) {
-    upstream = await fetch(targetUrl, fetchOptions)
-  } else {
-    try {
-      upstream = await fetchWithTimeout(
-        targetUrl,
-        fetchOptions,
-        CONFIG.API_TIMEOUT
-      )
-    } catch {
-      upstream = await fetch(targetUrl, fetchOptions)
+    /* ---------- WebSocket：最优先 ---------- */
+    if (
+      req.headers.get('upgrade') === 'websocket' ||
+      req.headers.get('sec-websocket-key')
+    ) {
+      return fetch(req)
     }
-  }
 
-  /* ---------- Response 处理 ---------- */
-  const resHeaders = new Headers(upstream.headers)
-  resHeaders.delete('content-security-policy')
-  resHeaders.delete('clear-site-data')
-  resHeaders.set('access-control-allow-origin', '*')
+    /* ---------- 状态接口 ---------- */
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      return c.text('Emby Proxy OK', 200)
+    }
 
-  // 静态资源强制缓存
-  if (isStatic && upstream.status === 200) {
-    resHeaders.set(
-      'Cache-Control',
-      'public, max-age=31536000, immutable'
+    const targetPath = url.pathname.startsWith('/emby')
+      ? url.pathname
+      : '/emby' + url.pathname
+
+    const targetUrl = new URL(targetPath + url.search, CONFIG.UPSTREAM_URL)
+
+    const isStatic = CONFIG.STATIC_REGEX.test(targetPath)
+    const isVideo = CONFIG.VIDEO_REGEX.test(targetPath)
+    const isApiCacheable =
+      req.method === 'GET' && CONFIG.API_CACHE_REGEX.test(targetPath)
+
+    /* ---------- Range 视频：绝对直通（无 body） ---------- */
+    if (isVideo && req.headers.has('range')) {
+      const h = new Headers(req.headers)
+      h.set('Accept-Encoding', 'identity')
+      h.set('Accept', '*/*')
+
+      return fetch(targetUrl, {
+        method: 'GET',
+        headers: h
+      })
+    }
+
+    /* ---------- Header 构建 ---------- */
+    const headers = new Headers()
+    headers.set('Host', targetUrl.hostname)
+    headers.set('Origin', targetUrl.origin)
+    headers.set('Referer', targetUrl.origin)
+    headers.set('EMOS-PROXY-ID', CONFIG.PROXY_ID)
+    headers.set('EMOS-PROXY-NAME', CONFIG.PROXY_NAME)
+
+    const clientIp =
+      req.headers.get('cf-connecting-ip') ||
+      req.headers.get('x-forwarded-for')
+    if (clientIp) headers.set('X-Forwarded-For', clientIp)
+
+    const passHeaders = isVideo
+      ? ['accept']
+      : ['authorization', 'accept', 'accept-language']
+
+    for (const h of passHeaders) {
+      const v = req.headers.get(h)
+      if (v) headers.set(h, v)
+    }
+
+    /* ---------- Body（严格限制） ---------- */
+    let body = null
+    if (!['GET', 'HEAD'].includes(req.method)) {
+      body = await req.arrayBuffer()
+    }
+
+    const cf = {
+      cacheEverything: isStatic || isApiCacheable,
+      cacheTtl: isStatic ? 31536000 : 0,
+      polish: isStatic ? 'lossy' : 'off'
+    }
+
+    const upstream =
+      isVideo
+        ? await safeFetch(targetUrl, { method: req.method, headers, body }, null)
+        : await safeFetch(
+            targetUrl,
+            { method: req.method, headers, body, cf },
+            CONFIG.API_TIMEOUT
+          )
+
+    if (!upstream) {
+      return new Response('Upstream Fetch Failed', { status: 502 })
+    }
+
+    /* ---------- Response ---------- */
+    const resHeaders = new Headers(upstream.headers)
+    resHeaders.set('access-control-allow-origin', '*')
+    resHeaders.delete('content-security-policy')
+
+    if (isVideo && !resHeaders.get('Content-Type')) {
+      resHeaders.set('Content-Type', 'application/octet-stream')
+    }
+
+    return new Response(
+      req.method === 'HEAD' ? null : upstream.body,
+      {
+        status: upstream.status,
+        headers: resHeaders
+      }
     )
-    resHeaders.delete('pragma')
-    resHeaders.delete('expires')
+  } catch (e) {
+    return new Response(
+      'Worker Internal Error',
+      { status: 500 }
+    )
   }
-
-  // Hills：视频流稳定性
-  if (isVideo) {
-    resHeaders.set('Connection', 'close')
-    resHeaders.set('Accept-Ranges', 'bytes')
-  }
-
-  // WebSocket
-  if (upstream.status === 101) {
-    return new Response(null, {
-      status: 101,
-      webSocket: upstream.webSocket,
-      headers: resHeaders
-    })
-  }
-
-  // 重定向修正
-  if ([301, 302, 303, 307, 308].includes(upstream.status)) {
-    const loc = resHeaders.get('location')
-    if (loc) {
-      const u = new URL(loc, targetUrl)
-      resHeaders.set('Location', u.pathname + u.search)
-    }
-    return new Response(null, {
-      status: upstream.status,
-      headers: resHeaders
-    })
-  }
-
-  return new Response(upstream.body, {
-    status: upstream.status, // 含 206
-    headers: resHeaders
-  })
 })
 
 export default app
