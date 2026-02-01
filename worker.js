@@ -234,7 +234,7 @@ const STATUS_PAGE_HTML = `
         </div>
 
         <div class="flex gap-4">
-            <a href="https://emos.best" class="flex-1 bg-indigo-600 text-white text-center py-3 rounded-xl font-bold shadow-md">访问EMBY服务</a>
+            <a href="/web/index.html" class="flex-1 bg-indigo-600 text-white text-center py-3 rounded-xl font-bold shadow-md">访问EMBY服务</a>
             <button onclick="location.reload()" class="flex-1 bg-white border border-gray-200 text-blue-600 py-3 rounded-xl font-bold">重新测试延迟</button>
         </div>
         
@@ -242,10 +242,32 @@ const STATUS_PAGE_HTML = `
     </div>
 
     <script>
+        // 1. 增强型设备识别逻辑
+        function getDeviceDetail() {
+            const ua = navigator.userAgent;
+            let os = "未知系统";
+            let browser = "未知浏览器";
+
+            // 识别操作系统
+            if (/Windows/i.test(ua)) os = "Windows";
+            else if (/Macintosh|Mac OS X/i.test(ua)) os = "macOS";
+            else if (/Android/i.test(ua)) os = "Android";
+            else if (/iPhone|iPad|iPod/i.test(ua)) os = "iOS";
+            else if (/Linux/i.test(ua)) os = "Linux";
+
+            // 识别浏览器 (注意顺序，Edge/Chrome 包含 Safari 关键字)
+            if (/Edg/i.test(ua)) browser = "Edge";
+            else if (/Chrome/i.test(ua) && !/Edg/i.test(ua)) browser = "Chrome";
+            else if (/Firefox/i.test(ua)) browser = "Firefox";
+            else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browser = "Safari";
+            else if (/MicroMessenger/i.test(ua)) browser = "微信浏览器";
+
+            return { os, browser };
+        }
+
         async function measureLatency() {
             const start = Date.now();
             try {
-                // 向我们的 Worker 发起一个轻量 head 请求（确保 Worker 处理了 /ping 路径）
                 await fetch('/ping', { method: 'HEAD', cache: 'no-store' });
                 const end = Date.now();
                 const diff = end - start;
@@ -260,18 +282,22 @@ const STATUS_PAGE_HTML = `
             }
         }
 
-        // 获取基础信息
+        // 2. 初始化显示
+        const deviceInfo = getDeviceDetail();
+        document.getElementById('ua').innerText = deviceInfo.browser;
+        document.getElementById('os').innerText = deviceInfo.os;
         document.getElementById('time').innerText = new Date().toLocaleString();
-        document.getElementById('ua').innerText = navigator.userAgent.split(' ')[0]; // 简化显示
-        document.getElementById('os').innerText = navigator.platform;
 
-        // 通过 Cloudflare 提供的 trace 接口获取节点
+        // 3. 获取 Cloudflare 节点信息
         fetch('/cdn-cgi/trace').then(res => res.text()).then(data => {
             const lines = data.split('\\n');
             const info = {};
-            lines.forEach(line => { const [k, v] = line.split('='); if(k) info[k] = v; });
-            document.getElementById('location').innerText = '中国 (' + info.loc + ')';
-            document.getElementById('colo').innerText = info.colo;
+            lines.forEach(line => { 
+                const [k, v] = line.split('='); 
+                if(k) info[k.trim()] = v.trim(); 
+            });
+            document.getElementById('location').innerText = '中国 (' + (info.loc || '未知') + ')';
+            document.getElementById('colo').innerText = info.colo || '未知节点';
         });
 
         measureLatency();
