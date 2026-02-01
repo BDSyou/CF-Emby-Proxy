@@ -2,13 +2,12 @@ import { Hono } from 'hono'
 
 const CONFIG = {
   UPSTREAM_URL: 'https://emos.best', // Replace with your Emby server URL
-  // [关键修复] 
-  // 1. 增加自定义身份标识
-  PROXY_ID: 'eO9M28W9Js', // 请替换为你的真实 ID
-  PROXY_NAME: '游',     // 请替换为你的真实称号
   
-  // 2. 匹配 Emby 特有的无后缀图片路径 (/Images/Primary, /Images/Backdrop 包含 /emby/Items/*/Images/* 路径
-  STATIC_REGEX: /(\.(jpg|jpeg|png|gif|css|js|ico|svg|webp|woff|woff2)|(\/Images\/(Primary|Backdrop|Logo|Thumb|Banner|Art))|(\/emby\/Items\/.*\/Images\/))/i,
+  // [关键修复] 
+  // 1. 匹配带后缀的文件
+  // 2. 匹配 Emby 特有的无后缀图片路径 (/Images/Primary, /Images/Backdrop 等)
+  STATIC_REGEX: /(\.(jpg|jpeg|png|gif|css|js|ico|svg|webp|woff|woff2)|(\/Images\/(Primary|Backdrop|Logo|Thumb|Banner|Art)))/i,
+  
   // 视频流 (直连，不缓存，不重试)
   VIDEO_REGEX: /(\/Videos\/|\/Items\/.*\/Download|\/Items\/.*\/Stream)/i,
   
@@ -46,18 +45,9 @@ app.all('*', async (c) => {
   proxyHeaders.set('Referer', targetUrl.origin)
   proxyHeaders.set('Origin', targetUrl.origin)
   
-  // --- [修改] 满足要求：增加身份头部 & 传递 X-Forwarded-For ---
-  proxyHeaders.set('EMOS-PROXY-ID', CONFIG.PROXY_ID)
-  proxyHeaders.set('EMOS-PROXY-NAME', CONFIG.PROXY_NAME)
-  // 获取客户端真实 IP 并传递
-  const clientIp = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')
-  if (clientIp) {
-    proxyHeaders.set('X-Forwarded-For', clientIp)
-  }
-
   // 剔除杂项头
   proxyHeaders.delete('cf-connecting-ip')
-  //proxyHeaders.delete('x-forwarded-for')   //保留 X-Forwarded-For
+  proxyHeaders.delete('x-forwarded-for')
   proxyHeaders.delete('cf-ray')
   proxyHeaders.delete('cf-visitor')
 
@@ -113,8 +103,6 @@ app.all('*', async (c) => {
     let response;
 
     // 视频流 & Socket -> 直连 (无超时，无重试)
-    // --- [修改] 处理 206 状态码 ---
-    // 206 Partial Content 通常用于视频流分段，必须直连不超时
     if (isVideo || isWebSocket || req.method === 'POST') {
       response = await fetch(targetUrl.toString(), fetchOptions)
     } else {
@@ -146,12 +134,10 @@ app.all('*', async (c) => {
         resHeaders.delete('Expires')
     }
 
-    // --- [处理] WebSocket & 重定向 & 206 ---
     if (response.status === 101) {
       return new Response(null, { status: 101, webSocket: response.webSocket, headers: resHeaders })
     }
-    // 显式支持 206 状态码
-    const status = response.status;
+
     // 修正重定向
     if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = resHeaders.get('location')
@@ -164,9 +150,8 @@ app.all('*', async (c) => {
         return new Response(null, { status: response.status, headers: resHeaders })
     }
 
-    // 返回响应时保持原始状态码（包括 206）
     return new Response(response.body, {
-      status: status,
+      status: response.status,
       headers: resHeaders
     })
 
