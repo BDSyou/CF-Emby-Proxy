@@ -38,6 +38,12 @@ async function fetchWithTimeout(url, options, timeout) {
 app.all('*', async (c) => {
   const req = c.req.raw
   const url = new URL(req.url)
+
+  // 如果访问根路径，显示延迟检测页面
+  if (url.pathname === '/' || url.pathname === '/index.html') {
+    return c.html(STATUS_PAGE_HTML)
+  }
+
   // 强制使用 HTTPS 协议回源
   const targetUrl = new URL(url.pathname + url.search, CONFIG.UPSTREAM_URL)
   
@@ -176,3 +182,97 @@ app.all('*', async (c) => {
 })
 
 export default app
+
+const STATUS_PAGE_HTML = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EMBY反代延迟检测</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #f3f4f6; font-family: sans-serif; }
+        .glass-card { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border-radius: 20px; }
+        .gradient-text { background: linear-gradient(90deg, #3b82f6, #2dd4bf); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="max-w-md w-full space-y-4">
+        <h1 class="text-center text-xl font-bold flex items-center justify-center gap-2">
+            ⚡ EMBY反代延迟检测
+        </h1>
+        <p class="text-center text-gray-500 text-sm">实时测量您连接到EMBY服务器的网络延迟</p>
+        
+        <div class="bg-gradient-to-r from-blue-500 to-cyan-400 p-8 rounded-[30px] shadow-lg text-center text-white relative overflow-hidden">
+            <div class="text-xs opacity-80 mb-2">● 实时延迟</div>
+            <div id="latency" class="text-6xl font-bold">--ms</div>
+            <div id="status-tag" class="mt-4 inline-block bg-white/20 px-4 py-1 rounded-full text-xs">检测中...</div>
+        </div>
+
+        <div class="glass-card p-6 shadow-sm grid grid-cols-2 gap-4">
+            <div>
+                <div class="text-gray-400 text-xs">所在地区</div>
+                <div id="location" class="font-medium text-sm">加载中...</div>
+            </div>
+            <div>
+                <div class="text-gray-400 text-xs">CF节点</div>
+                <div id="colo" class="font-medium text-sm text-blue-500">获取中...</div>
+            </div>
+        </div>
+
+        <div class="glass-card p-6 shadow-sm space-y-3">
+            <h2 class="text-sm font-bold flex items-center gap-2">💻 设备信息</h2>
+            <div class="grid grid-cols-2 gap-y-2 text-xs text-gray-600">
+                <div>浏览器: <span id="ua" class="text-gray-900 font-medium">--</span></div>
+                <div>操作系统: <span id="os" class="text-gray-900 font-medium">--</span></div>
+                <div class="col-span-2">检测时间: <span id="time">--</span></div>
+            </div>
+        </div>
+
+        <div class="flex gap-4">
+            <a href="/emby/" class="flex-1 bg-indigo-600 text-white text-center py-3 rounded-xl font-bold shadow-md">访问EMBY服务</a>
+            <button onclick="location.reload()" class="flex-1 bg-white border border-gray-200 text-blue-600 py-3 rounded-xl font-bold">重新测试延迟</button>
+        </div>
+        
+        <p class="text-center text-[10px] text-gray-400">© 2026 emos | EMBY反代服务</p>
+    </div>
+
+    <script>
+        async function measureLatency() {
+            const start = Date.now();
+            try {
+                // 向我们的 Worker 发起一个轻量 head 请求（确保 Worker 处理了 /ping 路径）
+                await fetch('/ping', { method: 'HEAD', cache: 'no-store' });
+                const end = Date.now();
+                const diff = end - start;
+                document.getElementById('latency').innerText = diff + 'ms';
+                
+                const tag = document.getElementById('status-tag');
+                if(diff < 50) { tag.innerText = '极佳连接质量'; tag.className = 'mt-4 inline-block bg-green-400/40 px-4 py-1 rounded-full text-xs'; }
+                else if(diff < 150) { tag.innerText = '连接质量良好'; tag.className = 'mt-4 inline-block bg-yellow-400/40 px-4 py-1 rounded-full text-xs'; }
+                else { tag.innerText = '连接稍有延迟'; tag.className = 'mt-4 inline-block bg-red-400/40 px-4 py-1 rounded-full text-xs'; }
+            } catch (e) {
+                document.getElementById('latency').innerText = '失败';
+            }
+        }
+
+        // 获取基础信息
+        document.getElementById('time').innerText = new Date().toLocaleString();
+        document.getElementById('ua').innerText = navigator.userAgent.split(' ')[0]; // 简化显示
+        document.getElementById('os').innerText = navigator.platform;
+
+        // 通过 Cloudflare 提供的 trace 接口获取节点
+        fetch('/cdn-cgi/trace').then(res => res.text()).then(data => {
+            const lines = data.split('\\n');
+            const info = {};
+            lines.forEach(line => { const [k, v] = line.split('='); if(k) info[k] = v; });
+            document.getElementById('location').innerText = '中国 (' + info.loc + ')';
+            document.getElementById('colo').innerText = info.colo;
+        });
+
+        measureLatency();
+    </script>
+</body>
+</html>
+`
