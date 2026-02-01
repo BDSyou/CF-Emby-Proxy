@@ -48,7 +48,7 @@ app.all('*', async (c) => {
 }
 
   // 强制使用 HTTPS 协议回源
-  const targetUrl = new URL(url.pathname + url.search, CONFIG.UPSTREAM_URL)
+  const targetUrl = new URL('/emby' + url.pathname + url.search, CONFIG.UPSTREAM_URL)
   
   const proxyHeaders = new Headers(req.headers)
   proxyHeaders.set('Host', targetUrl.hostname)
