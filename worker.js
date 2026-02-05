@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
 const CONFIG = {
-  UPSTREAM_URL: 'https://emos.best', 
+  UPSTREAM_URL: 'https://emby.heiyou.top', 
   PROXY_ID: 'eO9M28W9Js', 
   PROXY_NAME: '@you', 
   BASE_PATH: '/emby',
